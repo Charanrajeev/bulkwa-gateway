@@ -3,38 +3,43 @@ name: Build APK
 on:
   push:
     branches: [main]
-  workflow_dispatch:   # allows manual trigger from GitHub website
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout code
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 2. Setup Node.js
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # 3. Setup Java
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      # 4. Setup Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # 5. Init React Native project and copy our files
+      - name: Install Android build tools
+        run: |
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
       - name: Init React Native project
         run: |
-          npx react-native@0.73.4 init BulkWAGateway --version 0.73.4 --skip-install
+          npx --yes react-native@0.73.4 init BulkWAGateway \
+            --version 0.73.4 \
+            --skip-install \
+            --npm
+
+      - name: Copy app files
+        run: |
           cp App.js BulkWAGateway/App.js
           cp package.json BulkWAGateway/package.json
           mkdir -p BulkWAGateway/android/app/src/main/java/com/bulkwagateway
@@ -43,44 +48,33 @@ jobs:
           cp android/app/src/main/java/com/bulkwagateway/SmsPackage.java \
              BulkWAGateway/android/app/src/main/java/com/bulkwagateway/SmsPackage.java
 
-      # 6. Install JS dependencies
-      - name: Install dependencies
+      - name: Install JS dependencies
         working-directory: BulkWAGateway
         run: npm install
 
-      # 7. Add SMS + Network permissions to AndroidManifest.xml
       - name: Patch AndroidManifest.xml
         working-directory: BulkWAGateway
         run: |
           MANIFEST=android/app/src/main/AndroidManifest.xml
           sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.SEND_SMS"/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>|' $MANIFEST
-          echo "--- AndroidManifest.xml ---"
-          cat $MANIFEST
 
-      # 8. Register SmsPackage in MainApplication.java
       - name: Patch MainApplication.java
         working-directory: BulkWAGateway
         run: |
           MAIN_APP=$(find android -name "MainApplication.java" | head -1)
-          echo "Patching: $MAIN_APP"
-          # Add import
-          sed -i '/^package com.bulkwagateway;/a import com.bulkwagateway.SmsPackage;' $MAIN_APP
-          # Add package registration
-          sed -i '/new PackageList(this).getPackages();/a \            packages.add(new SmsPackage());' $MAIN_APP
-          echo "--- MainApplication.java ---"
+          echo "Found: $MAIN_APP"
           cat $MAIN_APP
+          sed -i '/^package com.bulkwagateway;/a import com.bulkwagateway.SmsPackage;' $MAIN_APP
+          sed -i '/new PackageList(this).getPackages();/a \            packages.add(new SmsPackage());' $MAIN_APP
 
-      # 9. Make gradlew executable
-      - name: Make gradlew executable
+      - name: Fix gradle permissions
         working-directory: BulkWAGateway/android
         run: chmod +x gradlew
 
-      # 10. Build debug APK (no signing needed)
       - name: Build Debug APK
         working-directory: BulkWAGateway/android
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tail -150
 
-      # 11. Upload APK as downloadable artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
